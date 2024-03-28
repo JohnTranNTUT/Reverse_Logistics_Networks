@@ -1,0 +1,381 @@
+---
+title: "Black-formatter Example"
+jupyter: python3
+format: 
+  # ipynb
+  # html
+  html:
+   code-fold: true
+   code-tools: true
+filters:
+  - black-formatter
+embed-resources: true
+---
+
+# Import libraries and data file
+```{python}
+import pandas as pd
+import numpy as np
+import gurobipy as gp
+from gurobipy import GRB
+xl = pd.ExcelFile("./SouthVietnam.xlsx")
+list_sheets = xl.sheet_names
+print(list_sheets)
+```
+
+# Population and supply
+```{python}
+population_df = pd.read_excel(xl, sheet_name="Population", engine="openpyxl", index_col=0)
+# print(population_df)
+
+supply_df = population_df.copy()
+nb_of_periods = 6
+growth_rate_a_year = 1 + 0.12
+growth_rate_a_period = 1 + (1-growth_rate_a_year)/6
+waste_per_person_per_month = 0.8
+waste_per_person_per_year = waste_per_person_per_month * 12
+sum_of_power = (growth_rate_a_period ** nb_of_periods - 1) / (growth_rate_a_period - 1)
+supply_df["Supply of a year"] = supply_df["Populations"] * waste_per_person_per_year
+
+# Initialize periods
+for i in range(1, nb_of_periods +1):
+  supply_df[i] = np.nan
+for i in supply_df.index:
+  supply_df[1].loc[i] = int(supply_df.loc[i]["Supply of a year"]/sum_of_power)
+for index in supply_df.index:
+  for i in range(2, nb_of_periods+1):
+    supply_df[i].loc[index] =int(supply_df[i-1].loc[index] * growth_rate_a_period)
+print(supply_df)
+```
+
+# Stepwise inventory quantity points
+```{python}
+stepwise_inventory_quantity_points_df = pd.read_excel(xl, sheet_name="Stepwise_function", index_col=0)
+stepwise_inventory_quantity_points_df
+```
+
+<!-- # Capacity of Collection Center -->
+<!-- ```{python} -->
+<!-- capacity_cc_df = pd.read_excel(xl, sheet_name="capacity_cc") -->
+<!-- print(capacity_cc_df) -->
+<!-- ``` -->
+
+<!-- # Unit transportation cost of products (original paper) -->
+<!-- ```{python} -->
+<!-- unit_transport_cost_df = pd.read_excel(xl,sheet_name="Unit_transportation_cost", engine="openpyxl", skiprows=2,index_col=2) -->
+<!-- unit_transport_cost_df = unit_transport_cost_df.drop(["Unnamed: 0", "Unnamed: 1"], axis=1) -->
+<!-- print(unit_transport_cost_df) -->
+<!-- ``` -->
+
+# Fixed costs of establishing and operating collection centers
+```{python}
+establishing_cc_cost_df = pd.read_excel(xl, sheet_name= "Establishing_cc", index_col=0)
+establishing_cc_cost_df = establishing_cc_cost_df.astype({"Cost":int})
+print(establishing_cc_cost_df)
+```
+
+# Demand of firms on each product
+```{python}
+
+```
+
+# Distance from generation points to collection centers
+```{python}
+distance_gp_cc_df = pd.read_excel(xl, sheet_name="Distance", engine="openpyxl", skiprows=1, index_col=1, skipfooter=2)
+print(distance_gp_cc_df)
+```
+
+# Distance from collection center to firms
+```{python}
+distance_cc_firm_df = pd.read_excel("./SouthVietnam.xlsx", sheet_name=list_sheets[1], engine="openpyxl", skiprows=1, index_col=1)
+distance_cc_firm_df.drop(distance_cc_firm_df.columns[distance_cc_firm_df.columns.str.contains('unnamed: 0',case = False)],axis = 1, inplace = True)
+print(distance_cc_firm_df)
+```
+
+# Unit transportation cost of truck to deliver products from generation points to collection centers
+```{python}
+```
+
+# Unit transportation cost of truck to deliver products from collection centers to firms
+```{python}
+```
+
+# Stepwise quantity points
+```{python}
+inventory_quantity_points_df = pd.read_excel(xl, sheet_name="Inventory_quantity_points")
+print(inventory_quantity_points_df)
+```
+
+# Stepwise unit inventory cost
+```{python}
+inventory_holding_costs_df = pd.read_excel(xl,sheet_name="Inventory_holding_costs")
+print(inventory_holding_costs_df)
+```
+
+# Unit transportation cost of products sent from collection centers to firms
+```{python}
+transportation_cost_df = pd.read_excel(xl, sheet_name="transportation_costs")
+print(transportation_cost_df)
+```
+
+# Location Index
+```{python}
+fixed_costs_df = pd.read_excel("./SouthVietnam.xlsx", sheet_name= "Location Index", engine="openpyxl", index_col= 0)
+fixed_costs_df["Fixed_costs"] = np.nan
+x =fixed_costs_df["Populations"].sum()
+for i in fixed_costs_df.index:
+  fixed_costs_df["Fixed_costs"][i] = 1 + fixed_costs_df["Populations"][i]/x
+print(fixed_costs_df)
+```
+
+# Container Capacities
+```{python}
+container_capacities_df = pd.read_excel("./SouthVietnam.xlsx", sheet_name= "ContainerCapacities", engine="openpyxl", index_col= 0)
+print(container_capacities_df)
+```
+
+# Collection Center
+```{python}
+# container_capacities_df = pd.read_excel("./SouthVietnam.xlsx", sheet_name= "CollectionCenter", engine="openpyxl", index_col= 0)
+# print(container_capacities_df)
+```
+
+# Costs
+```{python}
+# costs_df = pd.read_excel("./SouthVietnam.xlsx", sheet_name= "CollectionCenter", engine="openpyxl", index_col= 0)
+# print(costs_df)
+```
+
+# Index
+```{python}
+index_df = pd.read_excel(xl, sheet_name="Index")
+def values_of_column(x):
+  return index_df[x].dropna().unique()
+
+products = values_of_column("Products")
+generation_points = values_of_column("Generation points")
+collection_centers = values_of_column("Collection centers")
+firms = values_of_column("Firms")
+periods = values_of_column("Periods")
+periods = periods.astype(int)
+truck_types = values_of_column("Truck types")
+inventory_quantity_points = range(1, len(inventory_quantity_points_df)+1)
+```
+
+
+# Model Parameters and Variables
+```{python}
+model = gp.Model("")
+# Indices
+# i = "generation points"
+# j = "collection centers"
+# f = "firms"
+# p = "products"
+# t = "Periods"
+# k = "truck types"
+LC = 100000000000000000
+SC = 0.000000000000001
+
+# Variable
+supply_of_product = model.addVars(
+    periods, generation_points, products
+)  # FIX: This is a parameter, not variable
+
+Q = model.addVars(periods, inventory_quantity_points, products) # FIX: This is a paramater, not a variable
+
+distance_gp_cc = model.addVars(
+    generation_points,
+    collection_centers,
+)# FIX: This is a paramater, not a variable
+distance_cc_firm = model.addVars(collection_centers, firms)# FIX: This is a paramater, not a variable
+
+transportation_cost_ij = model.addVars(
+    periods,
+    generation_points,
+    collection_centers,
+    products,
+)# FIX: This is a paramater, not a variable
+transportation_cost_jf = model.addVars(
+    periods,
+    collection_centers,
+    firms,
+    products,
+)# FIX: This is a paramater, not a variable
+estalishing_cc_cost = model.addVars(periods, collection_centers)
+inventory_holding_unit_costs = model.addVars(
+    periods,
+    collection_centers,
+    products,
+)# FIX: This is a paramater, not a variable
+stepwise_inventory_unit_costs = model.addVars(periods, inventory_quantity_points, products)# FIX: This is a paramater, not a variable
+
+cap = model.addVars(truck_types, products)# FIX: This is a paramater, not a variable
+
+x = model.addVars(
+    periods,
+    generation_points,
+    collection_centers,
+    products,
+)
+w = model.addVars(
+    periods,
+    collection_centers,
+    firms,
+    products,
+)
+inventory = model.addVars(
+    periods,
+    collection_centers,
+    products,
+)
+D = model.addVars(firms, products)
+e = model.addVars(firms, products)
+y = model.addVars(
+    periods,
+    collection_centers,
+    vtype=GRB.BINARY,
+)
+z = model.addVars(
+    periods,
+    collection_centers,
+    truck_types,
+    products,
+    vtype=GRB.BINARY,
+)
+u = model.addVars(
+    periods,
+    inventory_quantity_points,
+    collection_centers,
+    products,
+    vtype=GRB.BINARY,
+)
+g = model.addVars(
+    periods,
+    inventory_quantity_points,
+    collection_centers,
+    products,
+    vtype=GRB.BINARY,
+)
+s = model.addVars(periods,generation_points,collection_centers,products,truck_types,vtype=GRB.INTEGER)
+v = model.addVars(periods,collection_centers,firms,products,truck_types,vtype=GRB.INTEGER)
+
+# Constraint: (3) All of the products generated at supply points are sent to distribution centers
+model.addConstrs(
+    supply_of_product[t, i, p]
+    == gp.quicksum(x[t, i, j, p] for j in collection_centers)
+    for t in periods
+    for i in generation_points
+    for p in products
+)
+
+# Constraint: (4) The outflow if equal to the inflow
+model.addConstrs(
+    gp.quicksum(x[t, i, j, p] for i in generation_points)
+    + inventory[t - 1, j, p]
+    == gp.quicksum(w[t, j, f, p] for f in firms) + inventory[t, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+    if t - 1 in periods
+)
+
+# Constraint: (5) For each OEM and product, the amount of product sent to each OEM will meet demand of the OEM.
+model.addConstrs(
+    gp.quicksum(w[t, j, f, p] for t in periods for j in collection_centers)
+    == D[f, p] + e[f, p]
+    for f in firms
+    for p in products
+)
+
+# Constraint: (6) For each period and each product, the total capacity of the container bought until that period for a distribution center must always exceed the amount of product sent to the distribution center.
+
+
+# Constraint: (7) for each product in each period, only established distribution centers can have containers and buy only one type of container
+# model.addConstrs(gp.quicksum(x[t,i,j,p] for i in generation_points) <= y[t,j] for j in collection_centers for p in products for t in periods)
+
+# Constraint: (8) If a distribution center is established, it will remain open until the last period.
+model.addConstrs(
+    y[t - 1, j] <= y[t, j]
+    for j in collection_centers
+    for t in periods
+    if t - 1 in periods
+)
+
+# Constraint: (9) At the beginning of the planning horizon, there are no distribution centers which are established
+# model.addConstrs(y[])
+
+# Constraint: (10)
+
+# Constraint: (11)
+
+# Constraint: (14)
+model.addConstrs(inventory_holding_unit_costs[t,j,p] == gp.quicksum(stepwise_inventory_unit_costs[t,a,p]*u[t,a,j,p] for a in inventory_quantity_points if a+1 in inventory_quantity_points) for t in periods for j in collection_centers for p in products)
+
+# Constraint: (15)
+model.addConstrs(gp.quicksum(u[t,a,j,p]*Q[t,a,p] for a in inventory_quantity_points if a+1 in inventory_quantity_points) <= inventory[t,j,p] for j in collection_centers for p in products for t in periods)
+model.addConstrs(inventory[t,j,p]<=gp.quicksum(u[t,a,j,p]*Q[t,a+1,p] for a in inventory_quantity_points if a+1 in inventory_quantity_points) for j in collection_centers for p in products for t in periods)
+
+# Constraint: (16)
+model.addConstrs(
+    LC * (u[t, a, j, p] - 1) + inventory[t, j, p] <= g[t, a, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+    for a in inventory_quantity_points
+    if a + 1 in inventory_quantity_points
+)
+model.addConstrs(
+    g[t, a, j, p] <= LC * (1 - u[t, a, j, p]) + inventory[t, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+    for a in inventory_quantity_points
+    if a + 1 in inventory_quantity_points
+)
+
+# Constraint: (17)
+model.addConstrs(
+    -LC * u[t, a, j, p] <= g[t, a, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+    for a in inventory_quantity_points
+    if a + 1 in inventory_quantity_points
+)
+model.addConstrs(
+    g[t, a, j, p] <= LC * u[t, a, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+    for a in inventory_quantity_points
+    if a + 1 in inventory_quantity_points
+)
+
+# Constraint: (18)
+model.addConstrs(
+    gp.quicksum(
+        u[t, a, j, p]
+        for a in inventory_quantity_points
+        if a - 1 in inventory_quantity_points
+    )
+    == 1
+    for j in collection_centers
+    for t in periods
+    for p in products
+)
+
+# Constraint: (19)
+
+# Constraint: (20)
+model.addVars(cap[k,p] * v[t,j,f,p,k] - cap[k,p]+cap[k,p]*SC <= w[t,j,f,p] for t in periods for j in collection_centers for f in firms for p in products for k in truck_types)
+model.addVars(w[t,j,f,p] <= cap[k,p] * v[t,j,f,p,k] for t in periods for j in collection_centers for f in firms for p in products for k in truck_types)
+
+# Constraint: (21)
+model.addVars(cap[k,p] * s[t,i,j,p,k] - cap[k,p]+cap[k,p]*SC <= x[t,i,j,p] for t in periods for j in collection_centers for i in generation_points for p in products for k in truck_types)
+model.addVars(x[t,i,j,p] <= cap[k,p] * s[t,i,j,p,k] for t in periods for j in collection_centers for i in generation_points for p in products for k in truck_types)
+
+# Constraint: (22)
+model.addVars(-LC * y[t,j] <= x[t,i,j,p] for t in periods for i in generation_points for j in collection_centers for p in products)
+model.addVars(x[t,i,j,p] <= LC * y[t,j] for t in periods for i in generation_points for j in collection_centers for p in products)
+```
+
