@@ -80,7 +80,7 @@ def supply_of_product(periods, generation_points, products):
         * product_shares["Share"].loc[products]
     )
 
-print(type(supply_of_product(1, "An Giang", "TV")))
+print(supply_of_product(1, "An Giang", "TV"))
 ```
 
 # Fixed costs of establishing and operating collection centers
@@ -226,7 +226,7 @@ def demand_of_firms(firms, products):
 # Model Parameters and Variables
 ```{python}
 model = gp.Model("")
-LC = 10000000
+LC = 100000000
 SC = 0.0000001
 
 # Variable
@@ -277,7 +277,7 @@ g = model.addVars(
     inventory_quantity_points,
     collection_centers,
     products,
-    vtype=GRB.BINARY,
+    # vtype=GRB.BINARY,
 )
 
 s = model.addVars(
@@ -301,9 +301,10 @@ inventory_holding_unit_costs = model.addVars(
 
 
 # OBJECTIVES
-TC_gp_cc = gp.quicksum(transportation_cost_ij(t)*distance_gp_cc(i,j)* x[t,i,j,p] for t in periods for i in generation_points for j in collection_centers for p in products)
-TC_cc_firms = gp.quicksum(transportation_cost_jf(t) * distance_cc_firm(j,f) * w[t,j,f,p] for t in periods for j in collection_centers for f in firms for p in products)
-Costs_of_inventory = gp.quicksum(stepwise_inventory_unit_costs(t, 1, p)* inventory[t,j,p] for t in periods for j in collection_centers for p in products)
+TC_gp_cc = gp.quicksum(transportation_cost_ij(t)*distance_gp_cc(i,j)* s[t,i,j,p,k] for t in periods for i in generation_points for j in collection_centers for p in products for k in truck_types)
+TC_cc_firms = gp.quicksum(transportation_cost_jf(t) * distance_cc_firm(j,f) * v[t,j,f,p,k] for t in periods for j in collection_centers for f in firms for p in products for k in truck_types)
+# Costs_of_inventory = gp.quicksum(stepwise_inventory_unit_costs(t, 1, p)* inventory[t,j,p] for t in periods for j in collection_centers for p in products)
+Costs_of_inventory = gp.quicksum(stepwise_inventory_unit_costs(t, a, p)*g[t,a,j,p] for t in periods for a in inventory_quantity_points for j in collection_centers for p in products)
 Costs_of_establising_cc = gp.quicksum(establishing_cc_cost(t) * (y[t,j]-y[t-1,j]) for t in periods for j in collection_centers if t-1 in periods) + gp.quicksum(establishing_cc_cost(1)*y[1,j] for j in collection_centers)
 
 model.update()
@@ -366,6 +367,133 @@ model.addConstrs(
     for j in collection_centers
     for t in periods
     if t - 1 in periods
+)
+# Constraint: (14)
+model.addConstrs(
+    inventory_holding_unit_costs[t, j, p]
+    == gp.quicksum(
+        stepwise_inventory_unit_costs(t, a, p) * u[t, a, j, p]
+        for a in inventory_quantity_points
+        if a + 1 in inventory_quantity_points
+    )
+    for t in periods
+    for j in collection_centers
+    for p in products
+)
+
+# Constraint: (15)
+model.addConstrs(
+    gp.quicksum(
+        u[t, a, j, p] * Q(a, p)
+        for a in inventory_quantity_points
+        if a + 1 in inventory_quantity_points
+    )
+    <= inventory[t, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+)
+model.addConstrs(
+    inventory[t, j, p]
+    <= gp.quicksum(
+        u[t, a, j, p] * Q(a + 1, p)
+        for a in inventory_quantity_points
+        if a + 1 in inventory_quantity_points
+    )
+    for j in collection_centers
+    for p in products
+    for t in periods
+)
+
+# Constraint: (16)
+model.addConstrs(
+    LC * (u[t, a, j, p] - 1) + inventory[t, j, p] <= g[t, a, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+    for a in inventory_quantity_points
+    if a + 1 in inventory_quantity_points
+)
+model.addConstrs(
+    g[t, a, j, p] <= LC * (1 - u[t, a, j, p]) + inventory[t, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+    for a in inventory_quantity_points
+    if a + 1 in inventory_quantity_points
+)
+
+# Constraint: (17)
+model.addConstrs(
+    -LC * u[t, a, j, p] <= g[t, a, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+    for a in inventory_quantity_points
+    if a + 1 in inventory_quantity_points
+)
+model.addConstrs(
+    g[t, a, j, p] <= LC * u[t, a, j, p]
+    for j in collection_centers
+    for p in products
+    for t in periods
+    for a in inventory_quantity_points
+    if a + 1 in inventory_quantity_points
+)
+
+Constraint: (18)
+model.addConstrs(
+    gp.quicksum(
+        u[t, a, j, p]
+        for a in inventory_quantity_points
+        if a + 1 in inventory_quantity_points
+    )
+    == 1
+    for j in collection_centers
+    for t in periods
+    for p in products
+)
+
+# Constraint: (20)
+model.addConstrs(
+    gp.quicksum(vehicle_cap(k, p) * v[t, j, f, p, k]
+    - vehicle_cap(k, p)
+    + vehicle_cap(k, p) * SC for k in truck_types)
+    <= w[t, j, f, p]
+    for t in periods
+    for j in collection_centers
+    for f in firms
+    for p in products
+    # for k in truck_types
+)
+model.addConstrs(
+    w[t, j, f, p] <= gp.quicksum(vehicle_cap(k, p) * v[t, j, f, p, k] for k in truck_types)
+    for t in periods
+    for j in collection_centers
+    for f in firms
+    for p in products
+    # for k in truck_types
+)
+
+# Constraint: (21)
+model.addConstrs(
+    gp.quicksum(vehicle_cap(k, p) * s[t, i, j, p, k]
+    - vehicle_cap(k, p)
+    + vehicle_cap(k, p) * SC for k in truck_types)
+    <= x[t, i, j, p]
+    for t in periods
+    for j in collection_centers
+    for i in generation_points
+    for p in products
+    # for k in truck_types
+)
+model.addConstrs(
+    x[t, i, j, p] <= gp.quicksum(vehicle_cap(k, p) * s[t, i, j, p, k] for k in truck_types)
+    for t in periods
+    for j in collection_centers
+    for i in generation_points
+    for p in products
+    # for k in truck_types
 )
 
 model.optimize()

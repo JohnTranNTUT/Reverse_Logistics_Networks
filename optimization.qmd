@@ -20,7 +20,8 @@ import gurobipy as gp
 from gurobipy import GRB
 import itertools
 
-xl = pd.ExcelFile("./SouthVietnam.xlsx")
+# xl = pd.ExcelFile("./SouthVietnam.xlsx")
+xl = pd.ExcelFile("./SouthVietnam_change_firms_location.xlsx")
 list_sheets = xl.sheet_names
 print(list_sheets)
 ```
@@ -73,12 +74,13 @@ product_shares = pd.read_excel(
     xl, sheet_name="Product_shares", index_col="Products"
 )
 
-
 def supply_of_product(periods, generation_points, products):
     return float(
         supply_df[periods].loc[generation_points]
         * product_shares["Share"].loc[products]
     )
+
+print(type(supply_of_product(1, "An Giang", "TV")))
 ```
 
 # Fixed costs of establishing and operating collection centers
@@ -87,7 +89,6 @@ establishing_cc_cost_df = pd.read_excel(
     xl, sheet_name="Establishing_cc", index_col=0
 )
 
-# establishing_cc_cost_df = establishing_cc_cost_df.astype({"Cost":int})
 def establishing_cc_cost(periods):
     return float(establishing_cc_cost_df.loc[periods]["Cost"])
 ```
@@ -96,11 +97,9 @@ def establishing_cc_cost(periods):
 ```{python}
 # WARNING: Not test with Gurobi
 distance_gp_cc_df = pd.read_excel(
-    xl, sheet_name="Distance", engine="openpyxl", index_col=1, skipfooter=2
+    xl, sheet_name="Distance", engine="openpyxl", index_col=1
 )
 distance_gp_cc_df = distance_gp_cc_df.drop("No", axis=1)
-print(distance_gp_cc_df)
-
 
 def distance_gp_cc(generation_points, collection_centers):
     return float(distance_gp_cc_df[generation_points].loc[collection_centers])
@@ -126,7 +125,6 @@ transportation_cost_df = pd.read_excel(
 
 def transportation_cost_ij(periods):
     return float(transportation_cost_df["GP to CC"].loc[periods])
-
 
 def transportation_cost_jf(periods):
     return float(transportation_cost_df["CC to Firm"].loc[periods])
@@ -159,20 +157,22 @@ def stepwise_inventory_unit_costs(periods, inventory_quantity_points, products):
             & (inventory_holding_costs_df["Step"] == inventory_quantity_points)
         ][products].item()
     )
+print(stepwise_inventory_unit_costs(1, 2, "TV"))
 ```
 
 # Unit transportation cost of products sent from collection centers to firms
 ```{python}
-transportation_cost_df = pd.read_excel(xl, sheet_name="transportation_costs")
-print(transportation_cost_df)
+# transportation_cost_df = pd.read_excel(xl, sheet_name="transportation_costs")
+# print(transportation_cost_df)
 ```
 
 # Location Index
 ```{python}
 fixed_costs_df = pd.read_excel(
-    "./SouthVietnam.xlsx",
+xl,
+    # "./SouthVietnam_change_firms_location.xlsx",
     sheet_name="Location Index",
-    engine="openpyxl",
+    # engine="openpyxl",
     index_col=0,
 )
 fixed_costs_df["Fixed_costs"] = np.nan
@@ -187,7 +187,6 @@ print(fixed_costs_df)
 container_capacities_df = pd.read_excel(
     xl, sheet_name="ContainerCapacities", engine="openpyxl", index_col=0
 )
-
 def vehicle_cap(truck_types, products):
     return float(container_capacities_df[products].loc[truck_types])
 ```
@@ -215,13 +214,24 @@ periods = periods.astype(int)
 truck_types = values_of_column("Truck types")
 ```
 
+# Demand of firms
+```{python}
+firms_share = pd.read_excel(xl, sheet_name="Firms_demand", index_col=0)
+def demand_of_firms(firms, products):
+    sum_of_supply_of_products = sum(supply_of_product(t, i, products) for t in periods for i in generation_points)
+    return sum_of_supply_of_products * firms_share[firms].loc[products]
+# print(demand_of_firms("Firm A", "TV"))
+```
+
 # Model Parameters and Variables
 ```{python}
 model = gp.Model("")
-LC = 100000000000000000
-SC = 0.000000000000001
+LC = 10000000
+SC = 0.0000001
 
 # Variable
+model.setParam("MIPGap", 0.000)
+model.setParam("TimeLimit", 3600)
 
 
 x = model.addVars(
@@ -241,8 +251,7 @@ inventory = model.addVars(
     collection_centers,
     products,
 )
-D = model.addVars(firms, products)
-e = model.addVars(firms, products)
+e = model.addVars(firms, products, lb=-GRB.INFINITY, ub=0)
 y = model.addVars(
     periods,
     collection_centers,
@@ -267,7 +276,7 @@ g = model.addVars(
     inventory_quantity_points,
     collection_centers,
     products,
-    vtype=GRB.BINARY,
+    # vtype=GRB.BINARY,
 )
 
 s = model.addVars(
@@ -289,10 +298,26 @@ inventory_holding_unit_costs = model.addVars(
     products,
 )
 
+
+# OBJECTIVES
+TC_gp_cc = gp.quicksum(transportation_cost_ij(t)*distance_gp_cc(i,j)*s[t, i, j, p, k] for t in periods for i in generation_points for j in collection_centers for p in products for k in truck_types)
+TC_cc_firms = gp.quicksum(transportation_cost_jf(t) * distance_cc_firm(j,f) * v[t,j,f,p,k] for t in periods for j in collection_centers for f in firms for p in products for k in truck_types)
+# Costs_of_inventory = gp.quicksum(stepwise_inventory_unit_costs(t, a, p)*g[t,a,j,p] for t in periods for a in inventory_quantity_points for j in collection_centers for p in products)
+Costs_of_inventory = gp.quicksum(stepwise_inventory_unit_costs(t, 1, p)*g[t,1,j,p] for t in periods for j in collection_centers for p in products)
+# Costs_of_establising_cc = gp.quicksum(establishing_cc_cost(t) * (y[t,j]-y[t-1,j]) for t in periods for j in collection_centers if t-1 in periods)
+Costs_of_establising_cc = gp.quicksum(establishing_cc_cost(t) * (y[t,j]-y[t-1,j]) for t in periods for j in collection_centers if t-1 in periods) + gp.quicksum(establishing_cc_cost(1)*y[1,j] for j in collection_centers)
+
+model.update()
+
+model.setObjective(
+TC_gp_cc+ TC_cc_firms+ Costs_of_inventory
++ Costs_of_establising_cc
+)
+
 # Constraint: (3)
 model.addConstrs(
-    supply_of_product(t, i, p)
-    == gp.quicksum(x[t, i, j, p] for j in collection_centers)
+    gp.quicksum(x[t, i, j, p] for j in collection_centers)
+    ==  supply_of_product(t, i, p)
     for t in periods
     for i in generation_points
     for p in products
@@ -302,20 +327,36 @@ model.addConstrs(
 model.addConstrs(
     gp.quicksum(x[t, i, j, p] for i in generation_points)
     + inventory[t - 1, j, p]
-    == gp.quicksum(w[t, j, f, p] for f in firms) + inventory[t, j, p]
+    == gp.quicksum(w[t, j, f, p] for f in firms) + inventory[t,j,p]
     for j in collection_centers
     for p in products
     for t in periods
     if t - 1 in periods
 )
-
-# Constraint: (5)
+# model.addConstr(inventory[2, "Ho Chi Minh", "TV"] == 100)
 model.addConstrs(
-    gp.quicksum(w[t, j, f, p] for t in periods for j in collection_centers)
-    == D[f, p] + e[f, p]
-    for f in firms
+    gp.quicksum(x[1, i, j, p] for i in generation_points)
+    == gp.quicksum(w[1, j, f, p] for f in firms) + inventory[1,j,p]
+    for j in collection_centers
     for p in products
 )
+# difference_in_collection_center = model.addVars(products, collection_centers, products)
+# model.addConstrs(difference_in_collection_center ==
+#     gp.quicksum(x[t, i, j, p] for i in generation_points) -
+#     gp.quicksum(w[t, j, f, p] for f in firms) 
+#     for j in collection_centers
+#     for p in products
+#     for t in periods
+#     if t - 1 in periods
+# )
+
+# WARNING: Constraint: (5)
+# model.addConstrs(
+#     gp.quicksum(w[t, j, f, p] for t in periods for j in collection_centers for t in periods)
+#     == demand_of_firms(f,p) + e[f, p] # WARNING: D is parameter, not variable
+#     for f in firms
+#     for p in products
+# )
 
 # Constraint: (6)
 
@@ -427,60 +468,131 @@ model.addConstrs(
 # Constraint: (19)
 
 # Constraint: (20)
-model.addVars(
-    vehicle_cap(k, p) * v[t, j, f, p, k]
+model.addConstrs(
+    gp.quicksum(vehicle_cap(k, p) * v[t, j, f, p, k]
     - vehicle_cap(k, p)
-    + vehicle_cap(k, p) * SC
+    + vehicle_cap(k, p) * SC for k in truck_types)
     <= w[t, j, f, p]
     for t in periods
     for j in collection_centers
     for f in firms
     for p in products
-    for k in truck_types
+    # for k in truck_types
 )
-model.addVars(
-    w[t, j, f, p] <= vehicle_cap(k, p) * v[t, j, f, p, k]
+model.addConstrs(
+    w[t, j, f, p] <= gp.quicksum(vehicle_cap(k, p) * v[t, j, f, p, k] for k in truck_types)
     for t in periods
     for j in collection_centers
     for f in firms
     for p in products
-    for k in truck_types
+    # for k in truck_types
 )
 
 # Constraint: (21)
-model.addVars(
-    vehicle_cap(k, p) * s[t, i, j, p, k]
+model.addConstrs(
+    gp.quicksum(vehicle_cap(k, p) * s[t, i, j, p, k]
     - vehicle_cap(k, p)
-    + vehicle_cap(k, p) * SC
+    + vehicle_cap(k, p) * SC for k in truck_types)
     <= x[t, i, j, p]
     for t in periods
     for j in collection_centers
     for i in generation_points
     for p in products
-    for k in truck_types
+    # for k in truck_types
 )
-model.addVars(
-    x[t, i, j, p] <= vehicle_cap(k, p) * s[t, i, j, p, k]
+model.addConstrs(
+    x[t, i, j, p] <= gp.quicksum(vehicle_cap(k, p) * s[t, i, j, p, k] for k in truck_types)
     for t in periods
     for j in collection_centers
     for i in generation_points
     for p in products
-    for k in truck_types
+    # for k in truck_types
 )
 
 # Constraint: (22)
-model.addVars(
+model.addConstrs(
     -LC * y[t, j] <= x[t, i, j, p]
     for t in periods
     for i in generation_points
     for j in collection_centers
     for p in products
 )
-model.addVars(
+model.addConstrs(
     x[t, i, j, p] <= LC * y[t, j]
     for t in periods
     for i in generation_points
     for j in collection_centers
     for p in products
 )
+
+model.optimize()
+```
+
+```{python}
+print("Transportation costs from generation points to collection centers:", TC_gp_cc.getValue())
+print("Transportation costs from collection centers to geneation points:", TC_cc_firms.getValue())
+print("Costs of establigin collection center:", Costs_of_establising_cc.getValue())
+print("Costs of inventory:",Costs_of_inventory.getValue())
+for t,j in itertools.product(periods, collection_centers):
+    print(t, j, y[t,j].X)
+```
+
+```{python}
+for t,j,p in itertools.product(periods, collection_centers, products):
+    print("Periods:", t, "collection centers:", j, "products:", p, "amount:", sum(x[t,i,j,p].X for  i in generation_points))
+# print(x[t, i, j, p].X for t in periods for i in generation_points for j in collection_centers for p in products)
+# x_values= [ x[t, i, j, p].X for t in periods for i in generation_points for j in collection_centers for p in products ]# print(TC_1)
+# x_values = np.array(x_values)
+# x_values=x_values.reshape(len(periods), len(generation_points), len(collection_centers), len(products))
+# print(x_values.shape)
+```
+
+```{python}
+for t, j, p in itertools.product(periods, collection_centers, products):
+    print(f"Periods {t} collection center {j} with amount of product {p}: {sum(w[t,j,f,p].X for f in firms)}")
+```
+
+```{python}
+model.dispose()
+```
+
+```{python}
+# for j in collection_centers:
+#     print(y[1,j])
+```
+
+```{python}
+# for t, j, p in itertools.product(periods, collection_centers, products):
+#     print("difference: ", sum(x[t,i,j,p].X for i in generation_points)-sum(w[t,j,f,p].X for f in firms))
+#     print("Inventory", inventory[t,j,p].X)
+```
+
+```{python}
+# for t,a, j, p in itertools.product(periods,inventory_quantity_points, collection_centers, products):
+#     print("inventory: ", g[t,a,j,p].X)
+```
+
+```{python}
+# for t, j, p in itertools.product(periods, collection_centers, products):
+#     print(p, inventory[t, j, p].X)
+```
+
+```{python}
+# for t, a, j, p in itertools.product(periods, inventory_quantity_points, collection_centers, products):
+#     print(f"Periods {t}, {j}, inventory points {a} for product {p}: {g[t,a,j,p].X}")
+```
+
+```{python}
+# for f, p in itertools.product(firms, products):
+#     print(e[f,p].X)
+```
+
+```{python}
+# for t, j, p in itertools.product(periods, collection_centers, products):
+#     print(sum(g[t, a, j, p].X for a in inventory_quantity_points) -  inventory[t, j, p].X)
+```
+
+```{python}
+# for t, i,j,p,k in itertools.product(periods, generation_points, collection_centers, products, truck_types):
+#     print(s[t,i,j,p,k])
 ```
