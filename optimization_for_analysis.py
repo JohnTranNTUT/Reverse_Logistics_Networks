@@ -105,6 +105,9 @@ def transportation_cost_ij(periods):
 def transportation_cost_jf(periods):
     return float(transportation_cost_df["CC to Firm"].loc[periods])
 
+def cost_of_buying_trucks(truck_types, products):
+    return float(cost_of_buying_trucks_df[products].loc[truck_types])
+
 
 # %% [markdown]
 # # Stepwise quantity points
@@ -154,6 +157,8 @@ container_capacities_df = pd.read_excel(
     xl, sheet_name="ContainerCapacities", engine="openpyxl", index_col=0
 )
 
+cost_of_buying_trucks_df = pd.read_excel(xl, sheet_name= "Cost_of_buying_trucks",index_col=0)
+
 
 def vehicle_cap(truck_types, products):
     return float(container_capacities_df[products].loc[truck_types])
@@ -194,8 +199,10 @@ def demand_of_firms(firms, products):
     return sum_of_supply_of_products * firms_share[firms].loc[products]
 
 
-for amount_each_year in np.arange(0.3, 3, 0.1):
-    for a in range(0, 20):
+# for amount_each_year in np.arange(0.3, 3, 0.1):
+for amount_each_year in np.arange(1, 1.1, 0.1):
+    # for a in range(0, 20):
+    for a in range(20, 20+1):
         supply_df = population_df.copy()
         # nb_of_periods = 6
         # growth_rate_a_year = 1 + 0.12
@@ -304,6 +311,9 @@ for amount_each_year in np.arange(0.3, 3, 0.1):
             periods, collection_centers, firms, products, truck_types, vtype=GRB.INTEGER
         )
 
+        o = model.addVars(products, truck_types, vtype=GRB.INTEGER)
+        q = model.addVars(products, truck_types, vtype=GRB.INTEGER)
+
         inventory_holding_unit_costs = model.addVars(
             periods,
             collection_centers,
@@ -345,10 +355,12 @@ for amount_each_year in np.arange(0.3, 3, 0.1):
             if t - 1 in periods
         ) + gp.quicksum(establishing_cc_cost(1) * y[1, j] for j in collection_centers)
 
+        Costs_of_buying_trucks = gp.quicksum(cost_of_buying_trucks(r,p) *(o[p,r] + q[p,r]) for p in products for r in truck_types)
+
         model.update()
 
         model.setObjective(
-            TC_gp_cc + TC_cc_firms + Costs_of_inventory + Costs_of_establising_cc
+            TC_gp_cc + TC_cc_firms + Costs_of_inventory + Costs_of_establising_cc + Costs_of_buying_trucks
         )
 
         # Constraint: (3)
@@ -565,13 +577,69 @@ for amount_each_year in np.arange(0.3, 3, 0.1):
             for p in products
         )
 
+        # Constraint: (21):
+        model.addConstrs(
+            S_pr * m[t, i, j, p, r] - S_pr + S_pr * SC <= s[t, i, j, p, r]
+            for t in periods
+            for i in generation_points
+            for j in collection_centers
+            for p in products
+            for r in truck_types
+        )
+        model.addConstrs(
+            s[t, i, j, p, r] <= S_pr * m[t, i, j, p, r]
+            for t in periods
+            for i in generation_points
+            for j in collection_centers
+            for p in products
+            for r in truck_types
+        )
+
+        # Constraint: (22)
+        model.addConstrs(
+            Q_pr * n[t, j, f, p, r] - Q_pr + Q_pr * SC <= v[t, j, f, p, r]
+            for t in periods
+            for j in collection_centers
+            for f in firms
+            for p in products
+            for r in truck_types
+        )
+        model.addConstrs(
+            v[t, j, f, p, r] <= Q_pr * n[t, j, f, p, r]
+            for t in periods
+            for j in collection_centers
+            for f in firms
+            for p in products
+            for r in truck_types
+        )
+
+        # Constraint: (23)
+        model.addConstrs(
+            o[p, r]
+            >= gp.quicksum(
+                m[t, i, j, p, r] for i in generation_points for j in collection_centers
+            )
+            for t in periods
+            for p in products
+            for r in truck_types
+        )
+
+        # Constraint: (24)
+        model.addConstrs(
+            q[p, r]
+            >= gp.quicksum(n[t, j, f, p, r] for j in collection_centers for f in firms)
+            for t in periods
+            for p in products
+            for r in truck_types
+        )
+
         model.optimize()
 
         # %%
         file = open("Investigate_reverse_logistics.txt", mode="a")
         file.write(
             # "\n" + str(model.ObjVal)
-            f"\n{amount_each_year*3.7} {a*0.05*100} {round(model.ObjVal,2)} {round(TC_gp_cc.getValue(),2)} {round(TC_cc_firms.getValue(),2)} {round(Costs_of_establising_cc.getValue(),2)} {round(Costs_of_inventory.getValue(),2)} {model.MIPGap * 100} {round(model.Runtime,2)}"
+            f"\n{amount_each_year*3.7} {a*0.05*100} {round(model.ObjVal,2)} {round(TC_gp_cc.getValue(),2)} {round(TC_cc_firms.getValue(),2)} {round(Costs_of_establising_cc.getValue(),2)} {round(Costs_of_inventory.getValue(),2)} {round(Costs_of_buying_trucks.getValue(), 2)} {model.MIPGap * 100} {round(model.Runtime,2)}"
         )
         file.close()
         model.dispose()
